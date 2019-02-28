@@ -1,0 +1,468 @@
+---
+title: "SN_Project_V1"
+output: html_notebook
+---
+
+```{r}
+# read in relevant libraries
+library(data.table)
+library(igraph)
+library(recommenderlab)
+library(ggplot2)
+```
+
+```{r}
+# set random seed
+set.seed(23495)
+```
+
+The primary rating data was prepped in a separate code file, sampled, and and stored. The cleaned data is directly imported here for convenience.
+```{r}
+# read in rating data 
+rating.dt <- fread("netflix_sampled_data.csv", header=TRUE) # data for 2004, min. 100 user reviews and 100 movie ratings
+
+# get data on movie names
+## adjusted movie title names slightly directly in csv file prior to import
+movies.dt <- fread("movie_titles_aws.csv", header=FALSE, col.names=c("MovieID", "Title"))
+```
+
+***************
+
+#### Basic summary statistics
+
+```{r}
+# number of unique movies
+cat("Number of unique movies:", length(unique(rating.dt$MovieID)))
+
+# number of users
+cat("\nNumber of users who provided ratings:",length(unique(rating.dt$CustomerID)))
+
+# number of total ratings
+cat("\nNumber of total ratings:",nrow(rating.dt))
+```
+
+```{r}
+# average and median user rating
+cat("Average rating across data:",mean(rating.dt$Rating))
+cat("\nMedian rating across data:",median(rating.dt$Rating))
+```
+
+```{r}
+# distribution of average rating by user (indicating lack of uniformity)
+# color options: #AA2B2B #9D2E2E ##98141D --> pptx dark red
+avg.ratings <- rating.dt[, .(AvgRating=mean(Rating)), by=CustomerID]
+ggplot(avg.ratings, aes(x=AvgRating)) + 
+  geom_histogram(binwidth=0.2, col="gray", fill="#9D2E2E") + 
+  labs(x="Average User Rating", y="Number of Users", title="Distribution of Average User Rating") + theme_minimal() +
+  theme(text=element_text(family="Roboto"),
+        plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+        axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)), 
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("Average rating histogram.png", width=7, height=5)  
+
+```
+
+```{r}
+# distribution of movie rating by user
+# color options: #AA2B2B #9D2E2E
+ggplot(rating.dt, aes(x=Rating)) + 
+  geom_histogram(binwidth=0.3, col="gray", fill="#9D2E2E") + 
+  labs(x="User Rating of a Movie", y="Number of Users", title="Distribution of User Ratings") + 
+  theme_minimal() +
+  theme(text=element_text(family="Roboto"),
+        plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+        axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)), 
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("Rating Histogram.png", width=7, height=5)
+```
+
+```{r}
+# look at number of movies rated by user
+
+# get table with number of movies rated by each user
+user.ratings <- rating.dt[, .("NumRated"=.N), by=CustomerID]
+
+# average number of movies rated
+cat("Average number of movies rated:",mean(user.ratings$NumRated))
+
+# median number of movies rated
+cat("\nMedian number of movies rated:",median(user.ratings$NumRated))
+
+# max number of movvies rated
+cat("\nMax number of movies rated:",max(user.ratings$NumRated))
+```
+A number of users had very high movie ratings, e.g. in the 4000s that would imply 10+ movies seen per day on average. This may be due to multiple individuals sharing an account, or due to the use of on-site surveys to get ratings of movies a user saw in the past.
+
+```{r}
+# get Top10 movies with highest number of ratings
+movies.info <- rating.dt[, .("NumberofRatings"=.N, "AvgRating"=mean(Rating)), by=MovieID]
+movies.info <- merge(movies.info, movies.dt, by="MovieID")
+```
+
+```{r}
+# get Top10 movies with highest number of ratings
+print("Movies with highest number of ratings")
+head(movies.info[order(-NumberofRatings)]$Title, 10)
+```
+
+```{r}
+# get Top10 movies with highest average rating
+print("Movies with highest average ratings")
+head(movies.info[order(-AvgRating)]$Title, 10)
+```
+
+```{r}
+# Full plot
+ggplot(movies.info, aes(x=NumberofRatings, y=AvgRating)) + 
+  geom_smooth(method="loess", se=F, col="#9D2E2E", size=1.1) + 
+  labs(title="Average Rating versus Movie Degree Centrality", x="Movie Degree Centrality (in bipartite network)", y="Average Rating") + 
+  theme_minimal() + scale_x_continuous(breaks=seq(0,60000,10000)) +
+  theme(text=element_text(family="Roboto"),
+        plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+        axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)), 
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("Average rating vs degree.png", width=7, height=5)
+```
+
+```{r}
+# Zoomed In Plot
+ggplot(movies.info[NumberofRatings<3000,], aes(x=NumberofRatings, y=AvgRating)) + 
+  geom_smooth(method="loess", se=F, col="#9D2E2E", size=1.1) + 
+  labs(title="Zoomed in: Average Rating versus Movie Degree Centrality", x="Movie Degree Centrality (in bipartite network)", y="Average Rating") + 
+  theme_minimal() + scale_x_continuous(breaks=seq(0,3000,500)) +
+  theme(text=element_text(family="Roboto"),
+        plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+        axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)), 
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("Average rating vs degree_ZOOMED.png", width=7, height=5)
+```
+
+```{r}
+# Linear Regression on movies with 1500 or fewer ratings
+regress.dt <- movies.info[NumberofRatings <= 1000,] # create subset of movies with 1500 or fewer ratings
+setnames(regress.dt, "NumberofRatings", "Degree") # change name to degree
+summary(lm(AvgRating~Degree, data=regress.dt)) # regression on subset
+
+summary(lm(AvgRating~NumberofRatings, data=movies.info)) # regression on all data
+```
+
+```{r}
+# distribution of number of movies rated by user, limit axis to 1000+ movies
+plot.ratings <- user.ratings[,.(NumRated = ifelse(NumRated>=1000, 1000, NumRated))]
+ggplot(plot.ratings, aes(x=NumRated)) + 
+    geom_histogram(binwidth=8, col="gray", fill="#9D2E2E") + 
+    labs(x="Number of Movies Rated", y="Number of Users", title="Distribution of Number of Movies Rated") + 
+    theme_minimal() + scale_x_continuous(breaks=seq(100,1000,100),
+                                     labels=c("100","200","300","400","500","600","700","800","900", "1000+")) +
+  #scale_y_continuous(breaks=seq(0,60000,10000)) +
+    theme(text=element_text(family="Roboto"),
+          plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+          axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)), 
+          axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("number of movies rated histogram.png", width=7, height=5)
+```
+
+#### Building Networks: MOVIE-USER NETWORK
+
+```{r}
+# prep for making network
+rating.dt[,CustomerID := sub("^", "u", CustomerID )]
+rating.dt[, MovieID := as.character(MovieID)]
+
+# make bipartite graph
+graph.bp <- graph.data.frame(rating.dt[,1:2], directed=FALSE) # make general undirected graph
+V(graph.bp)$type <- V(graph.bp)$name %in% rating.dt$MovieID # specify type to make bipartite
+E(graph.bp)$weight <- rating.dt$Rating # add in rating as weight
+
+# look at graph
+graph.bp
+```
+
+```{r fig.width=20, fig.height=20}
+# Visualize graph layout
+bp.subplot <- induced_subgraph(graph.bp,v=sample(unlist(V(graph.bp)$name), 7500))
+
+# define color and shape mappings.
+col <- c("gray85", "#9D2E2E")
+shape <- c("circle", "square")
+
+plot(bp.subplot,
+  vertex.color = col[as.numeric(V(bp.subplot)$type)+1],
+  vertex.shape = shape[as.numeric(V(bp.subplot)$type)+1], layout=layout_as_bipartite(bp.subplot, hgap=30),
+  vertex.frame.color="gray60",
+  edge.color = "#E5AAAA",
+  vertex.label="", vertex.size=5)
+```
+
+#### Building Networks: MOVIE-MOVIE NETWORK
+
+```{r}
+# make bipartite graph on movie-movie network
+graph.bp2 <- graph.data.frame(rating.dt[,2:1], directed=FALSE) # make general undirected graph
+V(graph.bp2)$type <- V(graph.bp2)$name %in% rating.dt$CustomerID # specify type to make bipartite
+
+# look at graph
+graph.bp2
+```
+
+```{r}
+mov.mtx <- as_incidence_matrix(graph.bp2) # get affiliation matrix from chart
+mov.sp.mtx <- as(mov.mtx, "sparseMatrix") # encode as sparse matrix
+mov.coaffil.mtx <- tcrossprod(mov.sp.mtx) # get co-affiliation matrix to make movie network
+```
+
+```{r}
+# make movie-movie coaffiliation network
+graph.movies <- graph_from_adjacency_matrix(mov.coaffil.mtx, mode="undirected", diag=FALSE, weight=TRUE) # keep diagonals because indicate own rating strength?
+```
+
+```{r fig.width=20, fig.height=20}
+graph.movies
+
+mov.subplot <- induced_subgraph(graph.movies,v=sample(unlist(V(graph.movies)$name), 1000))
+plot.igraph(mov.subplot, vertex.label="", vertex.color="gray70", vertex.frame.color="gray30",
+            edge.color="#E5AAAA", vertex.size=3, layout=layout_with_kk)
+
+```
+
+```{r}
+# calculate co-affiliation centrality measures
+degree.score2 <- degree(graph.movies)
+closeness.score2 <- closeness(graph.movies)
+eigen.score2 <- eigen_centrality(graph.movies)
+
+movies.ratings.2 <- rating.dt[MovieID %in% V(graph.movies)$name,
+                               .("AvgRating"=mean(Rating)), by=MovieID]
+movies.performance.2 <- data.table("MovieID"=V(graph.movies)$name, "Degree"=degree.score2,
+                                   "Closeness"=closeness.score2)
+movies.performance.2 <- data.table("MovieID"=V(graph.movies)$name, "Degree"=degree.score2, 
+                                   "Closeness"=closeness.score2, "EigenCentrality"=eigen.score2$vector)
+movies.performance.2 <- merge(movies.performance.2, movies.ratings.2, by="MovieID")
+```
+
+```{r}
+# Movie-Movie Degree Centrality
+ggplot(movies.performance.2, aes(x=Degree, y=AvgRating)) +
+  geom_smooth(method="loess", se=F, col="#9D2E2E", size=1.1) +
+  labs(title="Average Rating versus Movie-Movie Degree Centrality", x="Movie Degree Centrality (in co-affiliation network)", y="Average Rating") +
+  theme_minimal() +
+  theme(plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+        axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("movie-movie degree vs avg rating.png", width=7, height=5)
+```
+
+```{r}
+# Movie-Movie Closeness Centrality
+ggplot(movies.performance.2, aes(x=Closeness, y=AvgRating)) +
+  geom_smooth(method="loess", se=F, col="#9D2E2E", size=1.1) +
+  labs(title="Average Rating versus Movie-Movie Closeness Centrality", x="Movie Closeness Centrality (in co-affiliation network)", y="Average Rating") +
+  theme_minimal() +
+  theme(text=element_text(family="Roboto"),
+        plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+        axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("movie-movie closeness vs avg rating.png", width=7, height=5)
+```
+
+```{r}
+# # Movie-Movie Eigen Centrality
+ggplot(movies.performance.2, aes(x=EigenCentrality, y=AvgRating)) +
+  geom_smooth(method="loess", se=F, col="#9D2E2E", size=1.1) +
+  labs(title="Average Rating versus Movie-Movie Eigen Centrality", x="Movie Eigen Centrality (in co-affiliation network)", y="Average Rating") +
+  theme_minimal() +
+  theme(text=element_text(family="Roboto"),
+        plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+        axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("movie-movie eigen vs avg rating.png", width=7, height=5)
+```
+
+```{r}
+# how to intepret
+summary(lm(AvgRating ~ Degree, data = movies.performance.2)) # degree
+summary(lm(AvgRating ~ Closeness, data = movies.performance.2)) # closeness
+summary(lm(AvgRating ~ EigenCentrality, data = movies.performance.2)) # EigenCentrality
+```
+
+#### Building Networks: USER-USER NETWORK
+
+```{r}
+# limit user-user network to users with at least 200 ratings
+users.sample <- copy(rating.dt)
+users.sample <- users.sample[, NumRatings := .N, by=CustomerID]
+users.sample <- users.sample[NumRatings >= 200, ]
+
+# create bipartite graph with less data
+graph.bp3 <- graph.data.frame(users.sample[,1:2], directed=FALSE) # make general undirected graph
+V(graph.bp3)$type <- V(graph.bp3)$name %in% users.sample$MovieID # specify type to make bipartite
+E(graph.bp3)$weight <- users.sample$Rating # add in rating as weight
+
+# get coaffiliation matrix from bipartite graph
+users.mtx <- as_incidence_matrix(graph.bp3) # get affiliation matrix from chart
+users.sp.mtx <- as(users.mtx, "sparseMatrix") # encode as sparse matrix
+users.coaffil.mtx <- tcrossprod(users.sp.mtx) # get co-affiliation matrix to make movie network
+```
+
+```{r}
+# make user-user coaffiliation network
+graph.users <- graph_from_adjacency_matrix(users.coaffil.mtx, mode="undirected", diag=FALSE, weight=TRUE) # keep diagonals because indicate own rating strength?
+```
+
+```{r fig.width=20, fig.height=20}
+#graph.users
+users.subplot <- induced_subgraph(graph.users,v=sample(unlist(V(graph.users)$name), 300))
+plot.igraph(users.subplot, vertex.color="gray70", vertex.label="", vertex.frame.color="gray30",
+            edge.color="#E5AAAA", vertex.size=3, layout=layout_with_kk)
+```
+
+```{r}
+# calculate co-affiliation centrality measures
+degree.score3 <- degree(graph.users)
+closeness.score3 <- closeness(graph.users)
+eigen.score3 <- eigen_centrality(graph.users)
+
+movies.ratings.3 <- rating.dt[CustomerID %in% V(graph.users)$name,
+                               .("AvgRating"=mean(Rating)), by=CustomerID]
+movies.performance.3 <- data.table("CustomerID"=V(graph.users)$name, "Degree"=degree.score3,
+                                   "Closeness"=closeness.score3)
+movies.performance.3 <- data.table("CustomerID"=V(graph.users)$name, "Degree"=degree.score3,
+                                   "Closeness"=closeness.score3, "EigenCentrality"=eigen.score3$vector)
+movies.performance.3 <- merge(movies.performance.3, movies.ratings.3, by="CustomerID")
+```
+
+```{r}
+# User-User Degree Centrality
+ggplot(movies.performance.3, aes(x=Degree, y=AvgRating)) +
+  geom_smooth(method="loess", se=F, col="#9D2E2E", size=1.1) +
+  labs(title="Average Rating versus User-User Degree Centrality", x="User Degree Centrality (in co-affiliation network)", y="Average Rating") +
+  theme_minimal() +
+  theme(plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+        axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("user-user degree vs avg rating.png", width=7, height=5)
+```
+
+```{r}
+# User-User Closeness Centrality
+ggplot(movies.performance.3, aes(x=Closeness, y=AvgRating)) +
+  geom_smooth(method="loess", se=F, col="#9D2E2E", size=1.1) +
+  labs(title="Average Rating versus User-User Closeness Centrality", x="User Closeness Centrality (in co-affiliation network)", y="Average Rating") +
+  theme_minimal() +
+  theme(text=element_text(family="Roboto"),
+        plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+        axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("user-user closeness vs avg rating.png", width=7, height=5)
+```
+
+```{r}
+# # Movie-Movie Eigen Centrality
+ggplot(movies.performance.3, aes(x=EigenCentrality, y=AvgRating)) +
+  geom_smooth(method="loess", se=F, col="#9D2E2E", size=1.1) +
+  labs(title="Average Rating versus User-User Eigen Centrality", x="User Eigen Centrality (in co-affiliation network)", y="Average Rating") +
+  theme_minimal() +
+  theme(text=element_text(family="Roboto"),
+        plot.title=element_text(size=14, hjust=0.5, margin = margin(t = 5, r = 0, b = 8, l = 0)),
+        axis.title.y = element_text(margin = margin(t = 0, r = 12, b = 0, l = 0)),
+        axis.title.x = element_text(margin = margin(t = 10, r = 0, b = 0, l = 0)))
+ggsave("user-user eigen vs avg rating.png", width=7, height=5)
+```
+
+```{r}
+# how to intepret
+summary(lm(AvgRating ~ Degree, data = movies.performance.3)) # degree
+summary(lm(AvgRating ~ Closeness, data = movies.performance.3)) # closeness
+summary(lm(AvgRating ~ EigenCentrality, data = movies.performance.3)) # EigenCentrality
+```
+
+#### RECOMMENDER LAB
+
+```{r}
+# get item-movie matrix from directed graph
+input.mtx <- as_incidence_matrix(graph.bp, attr="weight", sparse=TRUE)
+
+# store as recommender lab matrix #and normalize
+input.mtx <- as(input.mtx, "realRatingMatrix")
+```
+
+```{r}
+# inspect the rating distributions
+hist(getRatings(input.mtx))
+hist(getRatings(normalize(input.mtx)), breaks=100)
+hist(getRatings(normalize(input.mtx, method="Z-score")), breaks=100)
+hist(colMeans(input.mtx), breaks=20)
+```
+
+# Test example to produce sample recommendations (updated to give random sample)
+```{r}
+# create a recommender on UBCF
+rec.model = Recommender(input.mtx, method = "UBCF")
+
+# get a random user name
+test.user <- sample(rating.dt$CustomerID, 1)
+
+# get the top 10 movies recommended for user XX
+rowCounts(input.mtx[test.user])
+
+# what he rated high
+rated.high <- rating.dt[CustomerID==test.user & Rating > 3,]
+
+rec.test.user = predict(rec.model, input.mtx[test.user,], n=10)
+rec.compare <- as.numeric(unlist(as(rec.test.user, "list")))
+
+# movies he rated high
+high <- movies.dt[MovieID %in% rated.high$MovieID, .(MovieID,Title)]
+
+# movies recommended
+recommend <- movies.dt[MovieID %in% rec.compare, .(MovieID,Title)]
+
+high
+recommend
+```
+
+# Evaluation
+```{r}
+# evaluate different methods
+eval = evaluationScheme(input.mtx, method="split", train=0.75, given = 20, goodRating = 4)
+eval
+
+# algorithms (perform normalization automatically)
+algorithms <- list(
+  "random items" = list(name="RANDOM", param=NULL),
+  "popular items" = list(name="POPULAR", param=NULL),
+  "user-based CF" = list(name="UBCF", param=list(nn=50)),
+  "item-based CF" = list(name="IBCF", param=list(k=50)),
+  "SVD approximation" = list(name="SVD", param=list(k = 50)))
+```
+
+```{r}
+# evaluate top-N recommendations
+results1 <- evaluate(eval, algorithms, type = "topNList", n=c(1, 5, 10, 20, 50))
+```
+```{r}
+# ROC Curve
+plot(main="Comparison of ROC curves for 5 recommender methods", results1, legend="topleft", col=c("#231F20", "#00680A", "#140152", "#2274A5", "#9D2E2E"), cex=0.8, lwd=1.2, annotate=c(5))
+```
+
+```{r}
+# precision-recall curve
+plot(y="prec/rec", main="Comparison of ROC curves for 5 recommender methods", results1, legend="bottomright", col=c("#231F20", "#00680A", "#140152", "#2274A5", "#9D2E2E"), cex=0.8, lwd=1.2, annotate=c(5))
+```
+
+
+```{r}
+# evaluate ratings prediction
+results2 <- evaluate(eval, algorithms, type = "ratings")
+
+# MSE / MAE plot for rating
+plot(results2, ylim = c(0,3), main="Comparison of RMSE, MSE, and MAE for 5 recommender methods")
+```
+```{r}
+# MSE / MAE plot for rating
+plot(results2, ylim = c(0,3), main="Comparison of RMSE, MSE, and MAE for 5 recommender methods",
+col=c("#AFAFAF", "#67936B", "#314E89", "#7AA4BC", "#9E4545"))
+```
+
+
+
